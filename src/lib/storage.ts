@@ -28,7 +28,29 @@ export function getProgress(): StudentProgress {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultProgress();
-    return JSON.parse(raw) as StudentProgress;
+    const parsed = JSON.parse(raw);
+
+    // Migrate v1 data or fix missing fields
+    if (!parsed.tutorias || typeof parsed.tutorias !== 'object') {
+      parsed.tutorias = {};
+    }
+    if (!parsed.spacedRepetition || typeof parsed.spacedRepetition !== 'object') {
+      parsed.spacedRepetition = { reviews: [] };
+    }
+    if (typeof parsed.placementCompleted !== 'boolean') {
+      parsed.placementCompleted = false;
+    }
+    if (typeof parsed.age !== 'number') {
+      parsed.age = 7;
+    }
+    if (typeof parsed.currentModulo !== 'number') {
+      parsed.currentModulo = 1;
+    }
+    if (typeof parsed.currentTutoria !== 'string') {
+      parsed.currentTutoria = '1.1';
+    }
+
+    return parsed as StudentProgress;
   } catch {
     return defaultProgress();
   }
