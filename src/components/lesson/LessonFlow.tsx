@@ -1,14 +1,17 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { TutoriaConfig, Phase } from '@/lib/types';
 import type { SessionResult } from '@/components/exercises/ExerciseEngine';
 import type { AdaptiveLevel } from '@/lib/engine/adaptive';
+import { resetProgress } from '@/lib/storage';
 import PhaseIndicator from './PhaseIndicator';
 import TutorChat from '@/components/tutor/TutorChat';
 import Workspace from '@/components/workspace/Workspace';
 import ExerciseEngine from '@/components/exercises/ExerciseEngine';
+import DebugPanel from '@/components/debug/DebugPanel';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,19 +38,34 @@ export default function LessonFlow({
   initialLevel = 1,
   onComplete,
 }: LessonFlowProps) {
+  const searchParams = useSearchParams();
+  const isDebug = searchParams.get('debug') === 'true';
+
   const phases = tutoria.fases.map((f) => f.tipo);
   const [currentPhaseIndex, setCurrentPhaseIndex] = useState(0);
   const [completedPhases, setCompletedPhases] = useState<PhaseType[]>([]);
   const [sessionComplete, setSessionComplete] = useState(false);
   const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
+  const [adaptiveLevel, setAdaptiveLevel] = useState<AdaptiveLevel>(initialLevel);
+  const [interactionCount, setInteractionCount] = useState(0);
+  const [exerciseProgress, setExerciseProgress] = useState<{ current: number; total: number; correct: number } | null>(null);
   const sessionStartRef = useRef(Date.now());
 
   const currentPhase = phases[currentPhaseIndex] ?? 'ejercicios';
   const currentPhaseConfig: Phase | undefined = tutoria.fases[currentPhaseIndex];
 
+  // Show "next phase" button after some interactions in non-exercise phases
+  const showNextPhaseButton = currentPhase !== 'ejercicios' && interactionCount >= 2;
+
+  // Track interactions from TutorChat
+  const handleTutorInteraction = useCallback(() => {
+    setInteractionCount((c) => c + 1);
+  }, []);
+
   // ── Phase transition ──
   const handlePhaseTransition = useCallback(() => {
     setCompletedPhases((prev) => [...prev, currentPhase]);
+    setInteractionCount(0);
 
     if (currentPhaseIndex < phases.length - 1) {
       setCurrentPhaseIndex((i) => i + 1);
@@ -60,16 +78,41 @@ export default function LessonFlow({
       setCompletedPhases((prev) => [...prev, 'ejercicios']);
       setSessionResult(result);
       setSessionComplete(true);
+      setAdaptiveLevel(finalLevel);
       onComplete(result, finalLevel);
     },
     [onComplete],
   );
 
+  // ── Debug: skip phase ──
+  const handleDebugSkipPhase = useCallback(() => {
+    handlePhaseTransition();
+  }, [handlePhaseTransition]);
+
+  // ── Debug: complete tutoria ──
+  const handleDebugComplete = useCallback(() => {
+    const mockResult: SessionResult = {
+      correct: 8,
+      total: 8,
+      canAdvance: true,
+      message: '¡Perfecto! (debug mode)',
+    };
+    setCompletedPhases(phases as PhaseType[]);
+    setSessionResult(mockResult);
+    setSessionComplete(true);
+    onComplete(mockResult, adaptiveLevel);
+  }, [onComplete, adaptiveLevel, phases]);
+
+  // ── Debug: reset ──
+  const handleDebugReset = useCallback(() => {
+    resetProgress();
+    window.location.href = '/';
+  }, []);
+
   // ── Session timer (internal) ──
   useEffect(() => {
     const timer = setInterval(() => {
       const elapsed = (Date.now() - sessionStartRef.current) / 1000 / 60;
-      // Soft warning at 10 min — could trigger tutor to wrap up
       if (elapsed > 10) {
         // Internal tracking only
       }
@@ -132,6 +175,7 @@ export default function LessonFlow({
                 tutoriaConcept={tutoria.concepto}
                 phaseInstructions={currentPhaseConfig?.instruccionesTutor}
                 onPhaseTransition={handlePhaseTransition}
+                onInteraction={handleTutorInteraction}
                 initialMessage={`¡Hola ${studentName}! Hoy vamos a explorar ${tutoria.concepto.toLowerCase()}. ¡Jugá con las fichas! 🌿`}
               />
             </div>
@@ -163,6 +207,7 @@ export default function LessonFlow({
                 tutoriaConcept={tutoria.concepto}
                 phaseInstructions={currentPhaseConfig?.instruccionesTutor}
                 onPhaseTransition={handlePhaseTransition}
+                onInteraction={handleTutorInteraction}
                 initialMessage={`Ahora te voy a guiar, ${studentName}. ¡Vamos juntos! 🦉`}
               />
             </div>
@@ -182,10 +227,47 @@ export default function LessonFlow({
               tutoria={tutoria}
               initialLevel={initialLevel}
               onComplete={handleExerciseComplete}
+              onProgressUpdate={setExerciseProgress}
             />
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Manual "Next Phase" button for non-exercise phases */}
+      {showNextPhaseButton && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex justify-center"
+        >
+          <motion.button
+            onClick={handlePhaseTransition}
+            className="px-6 py-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 
+                       text-emerald-300 text-lg font-bold transition-colors border border-emerald-500/30"
+            whileHover={{ scale: 1.03 }}
+            whileTap={{ scale: 0.95 }}
+          >
+            Siguiente fase →
+          </motion.button>
+        </motion.div>
+      )}
+
+      {/* Debug panel */}
+      {isDebug && (
+        <DebugPanel
+          tutoria={tutoria}
+          currentPhase={currentPhase}
+          currentPhaseIndex={currentPhaseIndex}
+          totalPhases={phases.length}
+          completedPhases={completedPhases}
+          adaptiveLevel={adaptiveLevel}
+          exerciseProgress={exerciseProgress ?? undefined}
+          onSkipPhase={handleDebugSkipPhase}
+          onCompleteTutoria={handleDebugComplete}
+          onResetProgress={handleDebugReset}
+          onSetLevel={setAdaptiveLevel}
+        />
+      )}
     </div>
   );
 }

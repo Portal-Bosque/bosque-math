@@ -26,6 +26,7 @@ interface TutorChatProps {
   tutoriaConcept?: string;
   phaseInstructions?: string;
   onPhaseTransition?: () => void;
+  onInteraction?: () => void;
   initialMessage?: string;
 }
 
@@ -42,6 +43,7 @@ export default function TutorChat({
   tutoriaConcept,
   phaseInstructions,
   onPhaseTransition,
+  onInteraction,
   initialMessage,
 }: TutorChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -86,6 +88,7 @@ export default function TutorChat({
       setMessages(newMessages);
       setIsLoading(true);
       setCurrentResponse(null);
+      onInteraction?.();
 
       try {
         const apiMessages = newMessages.map((m) => ({

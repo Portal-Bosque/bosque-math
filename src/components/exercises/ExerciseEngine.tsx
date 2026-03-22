@@ -82,6 +82,7 @@ interface ExerciseEngineProps {
   tutoria: TutoriaConfig;
   initialLevel?: AdaptiveLevel;
   onComplete: (result: SessionResult, finalLevel: AdaptiveLevel) => void;
+  onProgressUpdate?: (progress: { current: number; total: number; correct: number }) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +93,7 @@ export default function ExerciseEngine({
   tutoria,
   initialLevel = 1,
   onComplete,
+  onProgressUpdate,
 }: ExerciseEngineProps) {
   const [adaptive, setAdaptive] = useState<AdaptiveState>(() =>
     createAdaptiveState(initialLevel),
@@ -129,9 +131,10 @@ export default function ExerciseEngine({
         setIsAnswered(false);
         setFailedAttempts(0);
         setTutorMessage(randomPhrase(TRANSITION_PHRASES));
+        onProgressUpdate?.({ current: nextIndex + 1, total, correct: correctCount + 1 });
       }
     }, 1500);
-  }, [currentIndex, total, correctCount, adaptive.level, onComplete]);
+  }, [currentIndex, total, correctCount, adaptive.level, onComplete, onProgressUpdate]);
 
   const handleWrongAnswer = useCallback(() => {
     setAdaptive((prev) => recordResult(prev, false));

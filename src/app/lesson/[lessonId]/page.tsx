@@ -1,8 +1,8 @@
 'use client';
 
-import { use } from 'react';
+import { use, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { getTutoria, getNextTutoria } from '@/lib/curriculum/tutorias';
 import { getProgress, updateTutoriaProgress } from '@/lib/storage';
@@ -154,13 +154,15 @@ export default function LessonPage({ params }: { params: Promise<{ lessonId: str
       </div>
 
       {/* Lesson flow */}
-      <LessonFlow
-        tutoria={tutoria}
-        studentName={progress.name}
-        studentAge={progress.age}
-        initialLevel={progress.tutorias[tutoriaId]?.adaptiveLevel ?? 1}
-        onComplete={handleComplete}
-      />
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center"><span className="text-white/50 text-xl">Cargando... 🦉</span></div>}>
+        <LessonFlow
+          tutoria={tutoria}
+          studentName={progress.name}
+          studentAge={progress.age}
+          initialLevel={progress.tutorias[tutoriaId]?.adaptiveLevel ?? 1}
+          onComplete={handleComplete}
+        />
+      </Suspense>
     </main>
   );
 }
