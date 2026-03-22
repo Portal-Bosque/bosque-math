@@ -1,45 +1,36 @@
-// localStorage wrapper for StudentProgress
+// =============================================================================
+// Bosque Math v2 — localStorage wrapper
+// =============================================================================
 
-import type { DifficultyLevel } from './engine/adaptive';
-
-export type LessonStatus = 'locked' | 'available' | 'in-progress' | 'completed';
-
-export interface LessonProgress {
-  status: LessonStatus;
-  bestScore: number;
-  attempts: number;
-  lastAttemptDate: string;
-  adaptiveLevel: DifficultyLevel;
-}
-
-export interface StudentProgress {
-  name: string;
-  currentLesson: number;
-  lessons: Record<string, LessonProgress>;
-}
+import type {
+  StudentProgress,
+  TutoriaProgress,
+  SpacedRepetitionState,
+  PlacementResult,
+} from './types';
 
 const STORAGE_KEY = 'bosque-math-progress';
 
-function getDefaultProgress(): StudentProgress {
+function defaultProgress(): StudentProgress {
   return {
     name: '',
-    currentLesson: 0,
-    lessons: {
-      '0': { status: 'available', bestScore: 0, attempts: 0, lastAttemptDate: '', adaptiveLevel: 1 },
-      '1': { status: 'locked', bestScore: 0, attempts: 0, lastAttemptDate: '', adaptiveLevel: 1 },
-      '2': { status: 'locked', bestScore: 0, attempts: 0, lastAttemptDate: '', adaptiveLevel: 1 },
-    },
+    age: 7,
+    placementCompleted: false,
+    currentModulo: 1,
+    currentTutoria: '1.1',
+    tutorias: {},
+    spacedRepetition: { reviews: [] },
   };
 }
 
-export function loadProgress(): StudentProgress {
-  if (typeof window === 'undefined') return getDefaultProgress();
+export function getProgress(): StudentProgress {
+  if (typeof window === 'undefined') return defaultProgress();
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return getDefaultProgress();
+    if (!raw) return defaultProgress();
     return JSON.parse(raw) as StudentProgress;
   } catch {
-    return getDefaultProgress();
+    return defaultProgress();
   }
 }
 
@@ -48,47 +39,42 @@ export function saveProgress(progress: StudentProgress): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
 }
 
-export function updateLessonProgress(
-  progress: StudentProgress,
-  lessonId: string,
-  score: number,
-  adaptiveLevel: DifficultyLevel
-): StudentProgress {
-  const lesson = progress.lessons[lessonId] ?? {
-    status: 'available' as LessonStatus,
+export function updateTutoriaProgress(
+  tutoriaId: string,
+  update: Partial<TutoriaProgress>,
+): void {
+  const progress = getProgress();
+  const existing = progress.tutorias[tutoriaId] ?? {
+    status: 'available' as const,
     bestScore: 0,
     attempts: 0,
     lastAttemptDate: '',
-    adaptiveLevel: 1 as DifficultyLevel,
+    adaptiveLevel: 1 as const,
+    masteryScore: 0,
   };
-
-  const updated: StudentProgress = {
-    ...progress,
-    lessons: {
-      ...progress.lessons,
-      [lessonId]: {
-        ...lesson,
-        bestScore: Math.max(lesson.bestScore, score),
-        attempts: lesson.attempts + 1,
-        lastAttemptDate: new Date().toISOString(),
-        adaptiveLevel,
-        status: score >= 6 ? 'completed' : 'in-progress',
-      },
-    },
-  };
-
-  // Unlock next lesson if completed
-  if (score >= 6) {
-    const nextId = String(Number(lessonId) + 1);
-    if (updated.lessons[nextId] && updated.lessons[nextId].status === 'locked') {
-      updated.lessons[nextId] = { ...updated.lessons[nextId], status: 'available' };
-    }
-    updated.currentLesson = Math.max(updated.currentLesson, Number(lessonId) + 1);
-  }
-
-  return updated;
+  progress.tutorias[tutoriaId] = { ...existing, ...update };
+  saveProgress(progress);
 }
 
-export function setStudentName(progress: StudentProgress, name: string): StudentProgress {
-  return { ...progress, name };
+export function completePlacement(result: PlacementResult): void {
+  const progress = getProgress();
+  progress.placementCompleted = true;
+  progress.currentModulo = result.startingModulo;
+  progress.currentTutoria = result.startingTutoria;
+  saveProgress(progress);
+}
+
+export function getSpacedRepetitionState(): SpacedRepetitionState {
+  return getProgress().spacedRepetition;
+}
+
+export function updateSpacedRepetition(state: SpacedRepetitionState): void {
+  const progress = getProgress();
+  progress.spacedRepetition = state;
+  saveProgress(progress);
+}
+
+export function resetProgress(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(STORAGE_KEY);
 }

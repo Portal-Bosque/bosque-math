@@ -1,220 +1,234 @@
-// Exercise generator for each lesson type
+// =============================================================================
+// Bosque Math v2 — Exercise Generator
+// Takes a TutoriaConfig + adaptive level, produces a session of exercises
+// 8 exercises + 2 review exercises, with variety enforcement
+// =============================================================================
 
-import { type DifficultyLevel, generatePair } from './adaptive';
+import type { Exercise, ExerciseType, TutoriaConfig } from '../types';
+import type { AdaptiveLevel } from './adaptive';
+import { getMaxNumber } from './adaptive';
+import { getSpacedRepetitionState } from '../storage';
 
-export type ExerciseType =
-  | 'subitizing'
-  | 'tile_sum'
-  | 'direct_sum'
-  | 'multiple_choice'
-  | 'true_false'
-  | 'missing_number';
+const EXERCISES_PER_SESSION = 8;
+const REVIEW_EXERCISES = 2;
 
-export interface Exercise {
-  id: string;
-  type: ExerciseType;
-  /** Numbers involved */
-  a: number;
-  b: number;
-  /** Correct answer */
-  answer: number;
-  /** For multiple choice: options */
-  options?: number[];
-  /** For true/false: the proposed (possibly wrong) answer */
-  proposedAnswer?: number;
-  /** For missing number: which is hidden — 'a' | 'b' | 'answer' */
-  missingPart?: 'a' | 'b' | 'answer';
-  /** Display instruction */
-  instruction: string;
+/** Generate a full session of exercises for a tutoria */
+export function generateSession(
+  tutoria: TutoriaConfig,
+  level: AdaptiveLevel,
+  includeReview: boolean = true
+): Exercise[] {
+  const exercisePhase = tutoria.fases.find((f) => f.tipo === 'ejercicios');
+  const types = exercisePhase?.tipos ?? ['suma_directa', 'multiple_choice'];
+  const maxNum = getMaxNumber(level);
+
+  // Generate main exercises
+  const exercises: Exercise[] = [];
+  for (let i = 0; i < EXERCISES_PER_SESSION; i++) {
+    const type = pickTypeWithVariety(types, exercises);
+    const exercise = generateExercise(
+      `${tutoria.tutoriaId}-${i}`,
+      type,
+      maxNum,
+      level,
+      tutoria.tutoriaId
+    );
+    exercises.push(exercise);
+  }
+
+  // Add review exercises from spaced repetition
+  if (includeReview && tutoria.spacedRepetition.conceptosARepasar.length > 0) {
+    const reviewExercises = generateReviewFromConfig(
+      tutoria,
+      level,
+      REVIEW_EXERCISES
+    );
+    exercises.push(...reviewExercises);
+  }
+
+  return exercises;
 }
 
-function randInt(min: number, max: number): number {
+/** Pick a type ensuring no more than 2 in a row */
+function pickTypeWithVariety(
+  types: ExerciseType[],
+  existing: Exercise[]
+): ExerciseType {
+  const lastTwo = existing.slice(-2).map((e) => e.type);
+
+  if (lastTwo.length === 2 && lastTwo[0] === lastTwo[1]) {
+    // Last 2 are same type — pick a different one
+    const filtered = types.filter((t) => t !== lastTwo[0]);
+    if (filtered.length > 0) {
+      return filtered[Math.floor(Math.random() * filtered.length)];
+    }
+  }
+
+  return types[Math.floor(Math.random() * types.length)];
+}
+
+/** Generate a single exercise based on type and level */
+function generateExercise(
+  id: string,
+  type: ExerciseType,
+  maxNum: number,
+  level: AdaptiveLevel,
+  fromTutoria?: string
+): Exercise {
+  switch (type) {
+    case 'suma_directa':
+      return generateSumaDirecta(id, maxNum, fromTutoria);
+    case 'multiple_choice':
+      return generateMultipleChoice(id, maxNum, fromTutoria);
+    case 'fichas':
+      return generateFichas(id, maxNum, fromTutoria);
+    case 'verdadero_falso':
+      return generateVerdaderoFalso(id, maxNum, fromTutoria);
+    case 'numero_faltante':
+      return generateNumeroFaltante(id, maxNum, fromTutoria);
+    case 'subitizing':
+      return generateSubitizing(id, maxNum, fromTutoria);
+    default:
+      return generateSumaDirecta(id, maxNum, fromTutoria);
+  }
+}
+
+function rand(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
+  const result = [...arr];
+  for (let i = result.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
+    [result[i], result[j]] = [result[j], result[i]];
   }
-  return a;
+  return result;
 }
 
-/** Generate a unique exercise ID */
-let exerciseCounter = 0;
-function nextId(type: string): string {
-  return `${type}-${Date.now()}-${exerciseCounter++}`;
-}
-
-/** Generate options for multiple choice (includes correct answer) */
-function generateOptions(correct: number, count: number = 4): number[] {
-  const opts = new Set<number>([correct]);
-  const min = Math.max(0, correct - 3);
-  const max = correct + 3;
-  while (opts.size < count) {
-    const v = randInt(min, max);
-    if (v !== correct && v >= 0) opts.add(v);
-  }
-  return shuffle([...opts]);
-}
-
-// --- Lesson-specific generators ---
-
-export function generateSubitizingExercise(): Exercise {
-  const n = randInt(1, 10);
+function generateSumaDirecta(id: string, maxNum: number, fromTutoria?: string): Exercise {
+  const a = rand(0, maxNum);
+  const b = rand(0, maxNum - a);
   return {
-    id: nextId('subit'),
-    type: 'subitizing',
-    a: n,
-    b: 0,
-    answer: n,
-    options: generateOptions(n, 4),
-    instruction: '¿Cuántos puntitos ves?',
+    id,
+    type: 'suma_directa',
+    question: `¿Cuánto es ${a} + ${b}?`,
+    correctAnswer: a + b,
+    equation: `${a} + ${b}`,
+    fromTutoria,
   };
 }
 
-export function generateTileSumExercise(level: DifficultyLevel): Exercise {
-  const { a, b } = generatePair(level);
-  return {
-    id: nextId('tilesum'),
-    type: 'tile_sum',
-    a,
-    b,
-    answer: a + b,
-    instruction: `Arrastrá fichas para hacer ${a + b}`,
-  };
-}
-
-export function generateDirectSumExercise(level: DifficultyLevel): Exercise {
-  const { a, b } = generatePair(level);
-  return {
-    id: nextId('direct'),
-    type: 'direct_sum',
-    a,
-    b,
-    answer: a + b,
-    instruction: `¿Cuánto es ${a} + ${b}?`,
-  };
-}
-
-export function generateMultipleChoiceExercise(level: DifficultyLevel): Exercise {
-  const { a, b } = generatePair(level);
-  const answer = a + b;
-  return {
-    id: nextId('mc'),
-    type: 'multiple_choice',
-    a,
-    b,
-    answer,
-    options: generateOptions(answer, 4),
-    instruction: `${a} + ${b} = ?`,
-  };
-}
-
-export function generateTrueFalseExercise(level: DifficultyLevel): Exercise {
-  const { a, b } = generatePair(level);
-  const answer = a + b;
-  // 50% chance of showing wrong answer
-  const isCorrect = Math.random() > 0.5;
-  const proposed = isCorrect ? answer : answer + randInt(1, 3) * (Math.random() > 0.5 ? 1 : -1);
-  return {
-    id: nextId('tf'),
-    type: 'true_false',
-    a,
-    b,
-    answer: isCorrect ? 1 : 0, // 1 = true, 0 = false
-    proposedAnswer: proposed,
-    instruction: `¿Es verdad que ${a} + ${b} = ${proposed}?`,
-  };
-}
-
-export function generateMissingNumberExercise(level: DifficultyLevel): Exercise {
-  const { a, b } = generatePair(level);
-  const answer = a + b;
-  const parts: Array<'a' | 'b' | 'answer'> = ['a', 'b', 'answer'];
-  const missingPart = parts[Math.floor(Math.random() * parts.length)];
-  
-  let instruction: string;
-  let correctAnswer: number;
-  switch (missingPart) {
-    case 'a':
-      instruction = `? + ${b} = ${answer}`;
-      correctAnswer = a;
-      break;
-    case 'b':
-      instruction = `${a} + ? = ${answer}`;
-      correctAnswer = b;
-      break;
-    case 'answer':
-      instruction = `${a} + ${b} = ?`;
-      correctAnswer = answer;
-      break;
-  }
-
-  return {
-    id: nextId('missing'),
-    type: 'missing_number',
-    a,
-    b,
-    answer: correctAnswer,
-    missingPart,
-    instruction,
-  };
-}
-
-/** Generate a full session of 8 exercises for a lesson */
-export function generateSession(lessonId: number, level: DifficultyLevel): Exercise[] {
-  const exercises: Exercise[] = [];
-
-  switch (lessonId) {
-    case 0: // Subitizing
-      for (let i = 0; i < 8; i++) {
-        exercises.push(generateSubitizingExercise());
-      }
-      break;
-
-    case 1: // Juntamos — tile-based
-      for (let i = 0; i < 8; i++) {
-        exercises.push(generateTileSumExercise(level));
-      }
-      break;
-
-    case 2: // Sumas hasta 5 — mixed types
-    default: {
-      const generators = [
-        () => generateDirectSumExercise(level),
-        () => generateMultipleChoiceExercise(level),
-        () => generateMissingNumberExercise(level),
-        () => generateTrueFalseExercise(level),
-        () => generateTileSumExercise(level),
-      ];
-      
-      // Ensure variety: no more than 2 of same type in a row
-      let lastType: ExerciseType | null = null;
-      let sameTypeCount = 0;
-
-      for (let i = 0; i < 8; i++) {
-        let ex: Exercise;
-        let attempts = 0;
-        do {
-          const gen = generators[Math.floor(Math.random() * generators.length)];
-          ex = gen();
-          attempts++;
-        } while (ex.type === lastType && sameTypeCount >= 2 && attempts < 10);
-
-        if (ex.type === lastType) {
-          sameTypeCount++;
-        } else {
-          sameTypeCount = 1;
-          lastType = ex.type;
-        }
-
-        exercises.push(ex);
-      }
-      break;
+function generateMultipleChoice(id: string, maxNum: number, fromTutoria?: string): Exercise {
+  const a = rand(1, maxNum);
+  const b = rand(0, maxNum - a);
+  const correct = a + b;
+  const wrongOptions = new Set<number>();
+  while (wrongOptions.size < 2) {
+    const wrong = correct + rand(-2, 2);
+    if (wrong !== correct && wrong >= 0 && wrong <= maxNum * 2) {
+      wrongOptions.add(wrong);
     }
   }
+  const options = shuffle([correct, ...wrongOptions]);
+  return {
+    id,
+    type: 'multiple_choice',
+    question: `¿Cuánto es ${a} + ${b}?`,
+    correctAnswer: correct,
+    options,
+    equation: `${a} + ${b}`,
+    fromTutoria,
+  };
+}
 
-  return exercises;
+function generateFichas(id: string, maxNum: number, fromTutoria?: string): Exercise {
+  const a = rand(1, maxNum);
+  const b = rand(1, maxNum - a);
+  return {
+    id,
+    type: 'fichas',
+    question: `Juntá las fichas: un grupo de ${a} y un grupo de ${b}. ¿Cuántas hay en total?`,
+    correctAnswer: a + b,
+    tiles: [a, b],
+    fromTutoria,
+  };
+}
+
+function generateVerdaderoFalso(id: string, maxNum: number, fromTutoria?: string): Exercise {
+  const a = rand(1, maxNum);
+  const b = rand(0, maxNum - a);
+  const correct = a + b;
+  const isTrue = Math.random() > 0.5;
+  const shown = isTrue ? correct : correct + rand(1, 2);
+  return {
+    id,
+    type: 'verdadero_falso',
+    question: `¿Es verdad que ${a} + ${b} = ${shown}?`,
+    correctAnswer: isTrue ? 1 : 0,
+    options: [0, 1], // 0 = falso, 1 = verdadero
+    equation: `${a} + ${b} = ${shown}`,
+    fromTutoria,
+  };
+}
+
+function generateNumeroFaltante(id: string, maxNum: number, fromTutoria?: string): Exercise {
+  const total = rand(2, maxNum);
+  const a = rand(1, total - 1);
+  const b = total - a;
+  // Hide one of them
+  const hideFirst = Math.random() > 0.5;
+  const question = hideFirst
+    ? `¿Qué número falta? ? + ${b} = ${total}`
+    : `¿Qué número falta? ${a} + ? = ${total}`;
+  return {
+    id,
+    type: 'numero_faltante',
+    question,
+    correctAnswer: hideFirst ? a : b,
+    equation: hideFirst ? `? + ${b} = ${total}` : `${a} + ? = ${total}`,
+    fromTutoria,
+  };
+}
+
+function generateSubitizing(id: string, maxNum: number, fromTutoria?: string): Exercise {
+  const count = rand(1, Math.min(maxNum, 5));
+  return {
+    id,
+    type: 'subitizing',
+    question: '¿Cuántas fichas ves?',
+    correctAnswer: count,
+    tiles: [count],
+    fromTutoria,
+  };
+}
+
+/** Generate review exercises from the tutoria's spacedRepetition config */
+function generateReviewFromConfig(
+  tutoria: TutoriaConfig,
+  level: AdaptiveLevel,
+  count: number
+): Exercise[] {
+  const maxNum = getMaxNumber(level);
+  const reviews: Exercise[] = [];
+  const reviewTypes: ExerciseType[] = ['multiple_choice', 'suma_directa', 'subitizing'];
+
+  for (let i = 0; i < count; i++) {
+    const type = reviewTypes[i % reviewTypes.length];
+    const reviewTutoriaId =
+      tutoria.spacedRepetition.conceptosARepasar[
+        i % tutoria.spacedRepetition.conceptosARepasar.length
+      ];
+    const exercise = generateExercise(
+      `review-${tutoria.tutoriaId}-${i}`,
+      type,
+      maxNum,
+      level,
+      reviewTutoriaId
+    );
+    exercise.isReview = true;
+    reviews.push(exercise);
+  }
+
+  return reviews;
 }

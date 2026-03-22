@@ -2,18 +2,15 @@
 
 import { useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { Exercise } from '@/lib/engine/exercise-generator';
+import type { Exercise, TutoriaConfig } from '@/lib/types';
 import { generateSession } from '@/lib/engine/exercise-generator';
 import {
   type AdaptiveState,
-  type DifficultyLevel,
+  type AdaptiveLevel,
   createAdaptiveState,
-  recordCorrect,
-  recordWrong,
+  recordResult,
+  getAccuracy,
 } from '@/lib/engine/adaptive';
-import { createAttemptTracker, recordFailedAttempt, type AttemptTracker } from '@/lib/tutor/protocol';
-import { getRandomPhrase } from '@/lib/tutor/phrases';
-import { scoreSession, type SessionResult } from '@/lib/engine/scoring';
 import TutorPanel from '@/components/tutor/TutorPanel';
 import StarBar from '@/components/progress/StarBar';
 import DirectSum from './DirectSum';
@@ -23,32 +20,92 @@ import TrueFalse from './TrueFalse';
 import MissingNumber from './MissingNumber';
 import SubitizingExercise from './SubitizingExercise';
 
-interface ExerciseEngineProps {
-  lessonId: number;
-  initialLevel?: DifficultyLevel;
-  onComplete: (result: SessionResult, finalLevel: DifficultyLevel) => void;
+// ---------------------------------------------------------------------------
+// Session result (local to exercises)
+// ---------------------------------------------------------------------------
+
+export interface SessionResult {
+  correct: number;
+  total: number;
+  canAdvance: boolean;
+  message: string;
 }
 
+function scoreSession(correct: number, total: number): SessionResult {
+  const pct = total > 0 ? correct / total : 0;
+  const canAdvance = pct >= 0.7;
+
+  let message: string;
+  if (pct >= 0.9) message = '¡Espectacular! Dominás esto completamente. 🌟';
+  else if (pct >= 0.7) message = '¡Muy bien! Ya podés avanzar a lo siguiente. 🎉';
+  else if (pct >= 0.5) message = '¡Vas bien! Con un poco más de práctica lo vas a dominar. 💪';
+  else message = '¡Seguí practicando! Cada intento te hace más fuerte. 🌱';
+
+  return { correct, total, canAdvance, message };
+}
+
+// ---------------------------------------------------------------------------
+// Motivational phrases
+// ---------------------------------------------------------------------------
+
+const CELEBRATION_PHRASES = [
+  '¡Muy bien! 🌟',
+  '¡Excelente! ⭐',
+  '¡Genial! 🎉',
+  '¡Así se hace! 💪',
+  '¡Perfecto! 🌿',
+  '¡Sos un crack! 🚀',
+];
+
+const ENCOURAGEMENT_PHRASES = [
+  '¡Casi! Probá de nuevo 💪',
+  'Pensalo tranqui... 🤔',
+  '¡No te rindas! 🌱',
+  'Fijate bien los números... 👀',
+];
+
+const TRANSITION_PHRASES = [
+  '¡Vamos con el siguiente! 🚀',
+  '¿Listo? ¡Acá va otro! 🦉',
+  '¡Dale que va! 💫',
+];
+
+function randomPhrase(phrases: string[]): string {
+  return phrases[Math.floor(Math.random() * phrases.length)];
+}
+
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
+
+interface ExerciseEngineProps {
+  tutoria: TutoriaConfig;
+  initialLevel?: AdaptiveLevel;
+  onComplete: (result: SessionResult, finalLevel: AdaptiveLevel) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export default function ExerciseEngine({
-  lessonId,
+  tutoria,
   initialLevel = 1,
   onComplete,
 }: ExerciseEngineProps) {
   const [adaptive, setAdaptive] = useState<AdaptiveState>(() =>
-    createAdaptiveState(initialLevel)
+    createAdaptiveState(initialLevel),
   );
 
   const [exercises] = useState<Exercise[]>(() =>
-    generateSession(lessonId, initialLevel)
+    generateSession(tutoria, initialLevel),
   );
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
-  const [tutorMessage, setTutorMessage] = useState(() => getRandomPhrase('transition'));
+  const [tutorMessage, setTutorMessage] = useState(() => randomPhrase(TRANSITION_PHRASES));
   const [isAnswered, setIsAnswered] = useState(false);
-  const [attemptTracker, setAttemptTracker] = useState<AttemptTracker>(() =>
-    createAttemptTracker(exercises[0]?.id ?? '0')
-  );
+  const [failedAttempts, setFailedAttempts] = useState(0);
   const [sessionDone, setSessionDone] = useState(false);
 
   const exercise = exercises[currentIndex] as Exercise | undefined;
@@ -57,10 +114,9 @@ export default function ExerciseEngine({
   const handleCorrectAnswer = useCallback(() => {
     setIsAnswered(true);
     setCorrectCount((c) => c + 1);
-    setAdaptive((prev) => recordCorrect(prev));
-    setTutorMessage(getRandomPhrase('celebration'));
+    setAdaptive((prev) => recordResult(prev, true));
+    setTutorMessage(randomPhrase(CELEBRATION_PHRASES));
 
-    // Advance after a short delay
     setTimeout(() => {
       const nextIndex = currentIndex + 1;
       if (nextIndex >= total) {
@@ -71,54 +127,47 @@ export default function ExerciseEngine({
       } else {
         setCurrentIndex(nextIndex);
         setIsAnswered(false);
-        setTutorMessage(getRandomPhrase('transition'));
-        setAttemptTracker(createAttemptTracker(exercises[nextIndex].id));
+        setFailedAttempts(0);
+        setTutorMessage(randomPhrase(TRANSITION_PHRASES));
       }
     }, 1500);
-  }, [currentIndex, total, correctCount, adaptive.level, exercises, onComplete]);
+  }, [currentIndex, total, correctCount, adaptive.level, onComplete]);
 
   const handleWrongAnswer = useCallback(() => {
-    setAdaptive((prev) => recordWrong(prev));
-    const response = recordFailedAttempt(attemptTracker);
-    setAttemptTracker({ ...attemptTracker });
-    setTutorMessage(response.message);
-  }, [attemptTracker]);
+    setAdaptive((prev) => recordResult(prev, false));
+    setFailedAttempts((f) => f + 1);
+    setTutorMessage(randomPhrase(ENCOURAGEMENT_PHRASES));
+  }, []);
 
   const handleAnswer = useCallback(
     (answer: number) => {
       if (!exercise || isAnswered) return;
-      if (answer === exercise.answer) {
+      if (answer === exercise.correctAnswer) {
         handleCorrectAnswer();
       } else {
         handleWrongAnswer();
       }
     },
-    [exercise, isAnswered, handleCorrectAnswer, handleWrongAnswer]
+    [exercise, isAnswered, handleCorrectAnswer, handleWrongAnswer],
   );
 
   const handleTrueFalseAnswer = useCallback(
     (isTrue: boolean) => {
       if (!exercise || isAnswered) return;
       const answer = isTrue ? 1 : 0;
-      if (answer === exercise.answer) {
+      if (answer === exercise.correctAnswer) {
         handleCorrectAnswer();
       } else {
         handleWrongAnswer();
       }
     },
-    [exercise, isAnswered, handleCorrectAnswer, handleWrongAnswer]
+    [exercise, isAnswered, handleCorrectAnswer, handleWrongAnswer],
   );
 
   const handleHelpClick = useCallback(() => {
     if (!exercise) return;
-    const lessonKey = `hint_lesson${lessonId}` as const;
-    const validKeys = ['hint_lesson0', 'hint_lesson1', 'hint_lesson2'] as const;
-    if (validKeys.includes(lessonKey as typeof validKeys[number])) {
-      setTutorMessage(getRandomPhrase(lessonKey as typeof validKeys[number]));
-    } else {
-      setTutorMessage(getRandomPhrase('motivation'));
-    }
-  }, [exercise, lessonId]);
+    setTutorMessage('Fijate en los números y contá despacio 🦉');
+  }, [exercise]);
 
   const stars = useMemo(() => {
     const filled = Array.from({ length: correctCount }, () => true);
@@ -151,6 +200,9 @@ export default function ExerciseEngine({
 
   if (!exercise) return null;
 
+  // Parse numbers from the exercise for v1-style components
+  const nums = parseExerciseNumbers(exercise);
+
   return (
     <div className="flex flex-col lg:flex-row gap-6 flex-1">
       {/* Main exercise area */}
@@ -176,52 +228,52 @@ export default function ExerciseEngine({
             >
               {exercise.type === 'subitizing' && (
                 <SubitizingExercise
-                  number={exercise.a}
+                  number={exercise.tiles?.[0] ?? exercise.correctAnswer}
                   options={exercise.options ?? []}
                   onAnswer={handleAnswer}
                   disabled={isAnswered}
                 />
               )}
-              {exercise.type === 'direct_sum' && (
+              {exercise.type === 'suma_directa' && (
                 <DirectSum
-                  a={exercise.a}
-                  b={exercise.b}
+                  a={nums.a}
+                  b={nums.b}
                   onAnswer={handleAnswer}
                   disabled={isAnswered}
                 />
               )}
-              {exercise.type === 'tile_sum' && (
+              {exercise.type === 'fichas' && (
                 <TileSum
-                  targetSum={exercise.answer}
-                  maxTileValue={Math.min(exercise.answer, 10)}
+                  targetSum={exercise.correctAnswer}
+                  maxTileValue={Math.min(exercise.correctAnswer, 10)}
                   onCorrect={handleCorrectAnswer}
                   disabled={isAnswered}
                 />
               )}
               {exercise.type === 'multiple_choice' && (
                 <MultipleChoice
-                  a={exercise.a}
-                  b={exercise.b}
+                  a={nums.a}
+                  b={nums.b}
                   options={exercise.options ?? []}
                   onAnswer={handleAnswer}
                   disabled={isAnswered}
                 />
               )}
-              {exercise.type === 'true_false' && (
+              {exercise.type === 'verdadero_falso' && (
                 <TrueFalse
-                  a={exercise.a}
-                  b={exercise.b}
-                  proposedAnswer={exercise.proposedAnswer ?? exercise.a + exercise.b}
+                  a={nums.a}
+                  b={nums.b}
+                  proposedAnswer={parseProposedAnswer(exercise)}
                   onAnswer={handleTrueFalseAnswer}
                   disabled={isAnswered}
                 />
               )}
-              {exercise.type === 'missing_number' && (
+              {exercise.type === 'numero_faltante' && (
                 <MissingNumber
-                  a={exercise.a}
-                  b={exercise.b}
-                  answer={exercise.a + exercise.b}
-                  missingPart={exercise.missingPart ?? 'answer'}
+                  a={nums.a}
+                  b={nums.b}
+                  answer={nums.a + nums.b}
+                  missingPart={detectMissingPart(exercise)}
                   onAnswer={handleAnswer}
                   disabled={isAnswered}
                 />
@@ -239,4 +291,64 @@ export default function ExerciseEngine({
       />
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers to extract a/b from v2 Exercise for v1-style sub-components
+// ---------------------------------------------------------------------------
+
+function parseExerciseNumbers(exercise: Exercise): { a: number; b: number } {
+  // Try to parse from equation like "3 + 2" or "? + 2 = 5"
+  if (exercise.equation) {
+    // Handle "a + b" pattern
+    const sumMatch = exercise.equation.match(/^(\d+)\s*\+\s*(\d+)$/);
+    if (sumMatch) {
+      return { a: parseInt(sumMatch[1], 10), b: parseInt(sumMatch[2], 10) };
+    }
+
+    // Handle "a + b = c" or verdadero_falso pattern
+    const eqMatch = exercise.equation.match(/^(\d+)\s*\+\s*(\d+)\s*=\s*(\d+)$/);
+    if (eqMatch) {
+      return { a: parseInt(eqMatch[1], 10), b: parseInt(eqMatch[2], 10) };
+    }
+
+    // Handle "? + b = c" pattern
+    const missingFirst = exercise.equation.match(/^\?\s*\+\s*(\d+)\s*=\s*(\d+)$/);
+    if (missingFirst) {
+      const b = parseInt(missingFirst[1], 10);
+      const total = parseInt(missingFirst[2], 10);
+      return { a: total - b, b };
+    }
+
+    // Handle "a + ? = c" pattern
+    const missingSecond = exercise.equation.match(/^(\d+)\s*\+\s*\?\s*=\s*(\d+)$/);
+    if (missingSecond) {
+      const a = parseInt(missingSecond[1], 10);
+      const total = parseInt(missingSecond[2], 10);
+      return { a, b: total - a };
+    }
+  }
+
+  // Fallback: try tiles
+  if (exercise.tiles && exercise.tiles.length >= 2) {
+    return { a: exercise.tiles[0], b: exercise.tiles[1] };
+  }
+
+  return { a: exercise.correctAnswer, b: 0 };
+}
+
+function parseProposedAnswer(exercise: Exercise): number {
+  if (exercise.equation) {
+    const match = exercise.equation.match(/=\s*(\d+)$/);
+    if (match) return parseInt(match[1], 10);
+  }
+  return exercise.correctAnswer;
+}
+
+function detectMissingPart(exercise: Exercise): 'a' | 'b' | 'answer' {
+  if (exercise.equation) {
+    if (exercise.equation.startsWith('?')) return 'a';
+    if (exercise.equation.includes('+ ?')) return 'b';
+  }
+  return 'answer';
 }
